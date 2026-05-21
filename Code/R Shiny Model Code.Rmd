@@ -1,0 +1,1014 @@
+---
+title: "R Shiny Model"
+author: "Edwynn Turner"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## R Shiny Graphic Basic
+```{r}
+# app.R
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+
+# --- Base parameters ---
+Qos  <- 694444
+Pos  <- 300
+MCQo <- 6.5
+
+# Recover original a, b from your system
+A <- matrix(c(1, -Qos,
+              1, -2*Qos), nrow = 2, byrow = TRUE)
+B <- c(Pos, MCQo)
+sol <- solve(A, B)
+a <- sol[1]; b <- sol[2]
+
+# --- Solver function ---
+solve_fringe <- function(n, ff, vv, g2, years2, a, b, MCQo) {
+  m <- (a * (1 + g2)^years2 / b + n * ff / vv) / (1/b + n/vv)
+  k <- 1 / (1/b + n/vv)
+
+  QNNs <- (m - MCQo) / (2 * k)
+
+  Po_QNN <- function(QNN) {
+    numerator   <- a*(1 + g2)^years2 / b + n*ff / vv - QNN
+    denominator <- 1/b + n/vv
+    numerator / denominator
+  }
+  Pos_2 <- Po_QNN(QNNs)
+
+  Sf_total <- max(n * ((Pos_2 - ff) / vv), 0)
+  Sf_per_firm <- ifelse(n > 0, Sf_total / n, 0)
+  Q_total <- QNNs + Sf_total
+
+  data.frame(
+    n = n,
+    QNNs = QNNs,
+    Pos_2 = Pos_2,
+    Sf_total = Sf_total,
+    Sf_per_firm = Sf_per_firm,
+    Q_total = Q_total
+  )
+}
+
+# --- UI ---
+ui <- fluidPage(
+  titlePanel("t=2: Competitive Fringe Generics with Dominant Novo Nordisk; Scenario Analysis"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("ff", "Generics Marginal Cost (Constant Portion):",
+                  min = 5.5, max = 7.5, value = 6.5, step = 0.1),
+      sliderInput("vv", "Generic Marginal Cost (Varying Portion):",
+                  min = 0.000001, max = 0.1, value = 0.001, step = 0.0005),
+      sliderInput("g2", "Yearly Growth Rate (Y-o-Y%):",
+                  min = 0.0, max = 0.2, value = 0.1, step = 0.01),
+      sliderInput("years2", "Time Horizon",
+                  min = 0, max = 20, value = 8, step = 1)
+    ),
+    mainPanel(
+      fluidRow(
+        column(6, plotOutput("pricePlot")),
+        column(6, plotOutput("quantityPlot"))
+      )
+    )
+  )
+)
+
+# --- Server ---
+server <- function(input, output) {
+  results <- reactive({
+    n_grid <- 2:20
+    lapply(n_grid, function(n) {
+      solve_fringe(n, input$ff, input$vv, input$g2, input$years2, a, b, MCQo)
+    }) %>% bind_rows()
+  })
+
+  output$pricePlot <- renderPlot({
+    df <- results()
+    ggplot(df, aes(x = n, y = Pos_2)) +
+      geom_line(aes(color = "Equilibrium Price"), size = 1.2) +
+      geom_point(aes(color = "Equilibrium Price"), size = 2) +
+      geom_hline(aes(yintercept = 300, linetype = "Original Monopoly Price")) +
+      scale_color_manual(values = c("Equilibrium Price" = "red")) +
+      scale_linetype_manual(values = c("Original Monopoly Price" = "dashed")) +
+      scale_y_continuous(breaks = pretty_breaks(n = 10)) +
+      labs(title = "Equilibrium Price vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Equilibrium Price (P*)",
+           color = NULL,
+           linetype = NULL) +
+      theme_minimal(base_size = 14) +
+      theme(legend.position = "top")
+  })
+
+  output$quantityPlot <- renderPlot({
+    df <- results() %>%
+      select(n, QNNs, Sf_total, Q_total) %>%
+      pivot_longer(cols = c(QNNs, Sf_total, Q_total),
+                   names_to = "Quantity_Type", values_to = "Quantity")
+
+    ggplot(df, aes(x = n, y = Quantity, color = Quantity_Type)) +
+      geom_line(size = 1.2) +
+      geom_point(size = 2) +
+      scale_color_manual(values = c("QNNs" = "red",
+                                    "Sf_total" = "blue",
+                                    "Q_total" = "darkgreen"),
+                         labels = c("Total Market Output",
+                                    "Novo Nordisk Output",
+                                    "Total Generics Output")) +
+      scale_y_continuous(labels = comma) +
+      labs(title = "Output vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Quantity of Ozempic + Biosimilars (Q*)",
+           color = NULL) +
+      theme_minimal(base_size = 14) +
+      theme(legend.position = "top")
+  })
+}
+
+# --- Run the app ---
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
+
+```{r}
+# app.R
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+library(plotly)
+
+# --- Base parameters ---
+Qos  <- 694444
+Pos  <- 300
+MCQo <- 6.5
+
+# Recovering original a, b from my system
+A <- matrix(c(1, -Qos,
+              1, -2*Qos), nrow = 2, byrow = TRUE)
+B <- c(Pos, MCQo)
+sol <- solve(A, B)
+a <- sol[1]; b <- sol[2]
+
+# --- Solver function ---
+solve_fringe <- function(n, ff, vv, g2, years2, a, b, MCQo) {
+  m <- (a * (1 + g2)^years2 / b + n * ff / vv) / (1/b + n/vv)
+  k <- 1 / (1/b + n/vv)
+
+  QNNs <- (m - MCQo) / (2 * k)
+
+  Po_QNN <- function(QNN) {
+    numerator   <- a*(1 + g2)^years2 / b + n*ff / vv - QNN
+    denominator <- 1/b + n/vv
+    numerator / denominator
+  }
+  Pos_2 <- Po_QNN(QNNs)
+
+  Sf_total <- max(n * ((Pos_2 - ff) / vv), 0)
+  Sf_per_firm <- ifelse(n > 0, Sf_total / n, 0)
+  Q_total <- QNNs + Sf_total
+
+  data.frame(
+    n = n,
+    QNNs = QNNs,
+    Pos_2 = Pos_2,
+    Sf_total = Sf_total,
+    Sf_per_firm = Sf_per_firm,
+    Q_total = Q_total
+  )
+}
+
+# --- UI ---
+ui <- fluidPage(
+  titlePanel("t=2: Competitive Fringe Generics with Dominant Novo Nordisk; Scenario Analysis"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("ff", HTML("Generics Marginal Cost (Constant Portion)"),
+                  min = 5.5, max = 7.5, value = 6.5, step = 0.1),
+      sliderInput("vv", HTML("Generic Marginal Cost (Varying Portion)"),
+                  min = 0.000001, max = 0.005, value = 0.001, step = 0.00005),
+      sliderInput("g2", HTML("Yearly Growth Rate (Y-o-Y%)"),
+                  min = 0.0, max = 0.2, value = 0.1, step = 0.01),
+      sliderInput("years2", HTML("Time Horizon (Years)"),
+                  min = 0, max = 12, value = 8, step = 1),
+      actionButton("reset", "Reset to Base Case")
+    ),
+    mainPanel(
+      fluidRow(
+        column(6, plotlyOutput("pricePlot")),
+        column(6, plotlyOutput("quantityPlot"))
+      )
+    )
+  )
+)
+
+# --- Server ---
+server <- function(input, output, session) {
+
+  # Reset button observer
+  observeEvent(input$reset, {
+    updateSliderInput(session, "ff", value = 6.5)
+    updateSliderInput(session, "vv", value = 0.001)
+    updateSliderInput(session, "g2", value = 0.1)
+    updateSliderInput(session, "years2", value = 8)
+  })
+
+  results <- reactive({
+    n_grid <- 2:20
+    df <- lapply(n_grid, function(n) {
+      solve_fringe(n, input$ff, input$vv, input$g2, input$years2, a, b, MCQo)
+    }) %>% bind_rows()
+
+    # Calculate percentage changes
+    df <- df %>%
+      arrange(n) %>%
+      mutate(
+        pct_change_price = (Pos_2 - lag(Pos_2)) / lag(Pos_2) * 100,
+        pct_change_QNNs = (QNNs - lag(QNNs)) / lag(QNNs) * 100,
+        pct_change_Sf_total = (Sf_total - lag(Sf_total)) / lag(Sf_total) * 100,
+        pct_change_Q_total = (Q_total - lag(Q_total)) / lag(Q_total) * 100,
+        pct_change_from300 = (Pos_2 - 300) / 300 * 100
+      )
+    df
+  })
+
+  output$pricePlot <- renderPlotly({
+    df <- results()
+    p <- ggplot(df, aes(x = n, y = Pos_2)) +
+      geom_line(aes(color = "Equilibrium Price"), size = 0.6) +
+      geom_point(aes(color = "Equilibrium Price",
+                     text = paste0("n: ", n,
+                                   "<br>P*: ", dollar(Pos_2, accuracy = 0.01),
+                                   "<br>% change from n-1: ",
+                                   ifelse(is.na(pct_change_price), "NA",
+                                          paste0(round(pct_change_price, 2), "%")),
+                                   "<br>% change from P*=300: ",
+                                   paste0(round(pct_change_from300, 2), "%"))),
+                 size = 1.2) +
+      geom_hline(aes(yintercept = 300, linetype = "Original Monopoly Price")) +
+      scale_color_manual(values = c("Equilibrium Price" = "red")) +
+      scale_linetype_manual(values = c("Original Monopoly Price" = "dashed")) +
+      scale_y_continuous(breaks = pretty_breaks(n = 8)) +
+      scale_x_continuous(breaks = seq(2, 20, 2)) +
+      labs(title = "Equilibrium Price vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Equilibrium Price (P*)",
+           color = NULL,
+           linetype = NULL) +
+      theme_minimal(base_size = 11) +
+      theme(
+        legend.position = "bottom",
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        plot.title = element_text(size = 9, face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey90", size = 0.2)
+      )
+
+    ggplotly(p, tooltip = "text") %>%
+      layout(
+        legend = list(orientation = "h", y = -0.35, font = list(size = 9)),
+        margin = list(b = 80)
+      ) %>%
+      config(displayModeBar = FALSE)
+  })
+
+output$quantityPlot <- renderPlotly({
+  df <- results() %>%
+    # compute both shares before pivot
+    mutate(
+      generic_share = ifelse(Q_total > 0, Sf_total / Q_total * 100, NA),
+      novo_share    = ifelse(Q_total > 0, QNNs / Q_total * 100, NA)
+    ) %>%
+    select(n, QNNs, Sf_total, Q_total,
+           pct_change_QNNs, pct_change_Sf_total, pct_change_Q_total,
+           generic_share, novo_share) %>%
+    pivot_longer(cols = c(QNNs, Sf_total, Q_total),
+                 names_to = "Quantity_Type", values_to = "Quantity") %>%
+    mutate(
+      pct_change = case_when(
+        Quantity_Type == "QNNs" ~ pct_change_QNNs,
+        Quantity_Type == "Sf_total" ~ pct_change_Sf_total,
+        Quantity_Type == "Q_total" ~ pct_change_Q_total
+      ),
+      label = case_when(
+        Quantity_Type == "QNNs" ~ "Novo Nordisk Output",
+        Quantity_Type == "Sf_total" ~ "Total Generics Output",
+        Quantity_Type == "Q_total" ~ "Total Market Output"
+      )
+    )
+
+  p <- ggplot(df, aes(x = n, y = Quantity, color = label)) +
+    geom_line(size = 0.6) +
+    geom_point(aes(text = paste0(
+      "n: ", n,
+      "<br>", label, " : ", comma(round(Quantity, 0)),
+      "<br>% change from n-1: ",
+      ifelse(is.na(pct_change), "NA",
+             paste0(round(pct_change, 2), "%")),
+      ifelse(label == "Total Generics Output",
+             paste0("<br>Generic Market Share: ",
+                    ifelse(is.na(generic_share), "NA",
+                           paste0(round(generic_share, 2), "%"))),
+             ifelse(label == "Novo Nordisk Output",
+                    paste0("<br>Novo Nordisk Market Share: ",
+                           ifelse(is.na(novo_share), "NA",
+                                  paste0(round(novo_share, 2), "%"))),
+                    ""))  # nothing extra for Total Market Output
+    )),
+    size = 1.2) +
+    scale_color_manual(values = c("Novo Nordisk Output" = "red",
+                                  "Total Generics Output" = "blue",
+                                  "Total Market Output" = "darkgreen")) +
+    scale_y_continuous(labels = comma, breaks = pretty_breaks(n = 8)) +
+    scale_x_continuous(breaks = seq(2, 20, 2)) +
+    labs(title = "Equilibrium Output vs. Number of Generic Drug Producers",
+         x = "Number of Generic Drug Producers (n)",
+         y = "Quantity of Ozempic + Biosimilars (Q*)",
+         color = NULL) +
+    theme_minimal(base_size = 11) +
+    theme(
+      legend.position = "bottom",
+      axis.title = element_text(size = 8),
+      axis.text = element_text(size = 8),
+      plot.title = element_text(size = 9, face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "grey90", size = 0.2)
+    )
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(
+      legend = list(orientation = "h", y = -0.35, font = list(size = 9)),
+      margin = list(b = 80)
+    ) %>%
+    config(displayModeBar = FALSE)
+})
+}
+
+# --- Run the app ---
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
+
+
+
+## R Shiny Graphic with Government Intervention 
+```{r}
+# app.R
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+library(plotly)
+
+# --- Base parameters ---
+Qos  <- 694444
+Pos  <- 300
+MCQo <- 6.5
+
+# Recovering original a, b from system
+A <- matrix(c(1, -Qos,
+              1, -2*Qos), nrow = 2, byrow = TRUE)
+B <- c(Pos, MCQo)
+sol <- solve(A, B)
+a <- sol[1]; b <- sol[2]
+
+# --- Solver function ---
+solve_fringe <- function(n, ff, vv, g2, years2, a, b, MCQo, pc_on, pc) {
+  
+  # Unconstrained equilibrium (your original logic)
+  m <- (a * (1 + g2)^years2 / b + n * ff / vv) / (1/b + n/vv)
+  k <- 1 / (1/b + n/vv)
+  QNNs_uncon <- (m - MCQo) / (2 * k)
+  Po_QNN <- function(QNN) {
+    numerator   <- a*(1 + g2)^years2 / b + n*ff / vv - QNN
+    denominator <- 1/b + n/vv
+    numerator / denominator
+  }
+  Pos_uncon <- Po_QNN(QNNs_uncon)
+  Sf_total_uncon <- max(n * ((Pos_uncon - ff) / vv), 0)
+  Q_total_uncon <- QNNs_uncon + Sf_total_uncon
+  
+  # If ceiling is OFF, return unconstrained results
+  if (!pc_on) {
+    return(data.frame(
+      n = n,
+      QNNs = QNNs_uncon,
+      Pos_2 = Pos_uncon,
+      Sf_total = Sf_total_uncon,
+      Sf_per_firm = ifelse(n > 0, Sf_total_uncon / n, 0),
+      Q_total = Q_total_uncon
+    ))
+  }
+  
+  # If ceiling is ON
+  if (Pos_uncon <= pc) {
+    # Ceiling not binding → same as unconstrained
+    return(data.frame(
+      n = n,
+      QNNs = QNNs_uncon,
+      Pos_2 = Pos_uncon,
+      Sf_total = Sf_total_uncon,
+      Sf_per_firm = ifelse(n > 0, Sf_total_uncon / n, 0),
+      Q_total = Q_total_uncon
+    ))
+  } else {
+    # Ceiling binds
+    # Generics supply at ceiling
+    Sf_total <- n * ((pc - ff) / vv)
+    
+    # Residual demand for Novo: P = a*(1+g2)^years2 - b*(QNN + Sf_total)
+    # Solve Cournot best response for Novo
+    m_resid <- (a * (1 + g2)^years2 / b - Sf_total) / (1/b)
+    k_resid <- 1 / (1/b)
+    QNNs <- (m_resid - MCQo) / (2 * k_resid)
+    Pos_new <- a*(1 + g2)^years2 - b*(QNNs + Sf_total)
+    
+    # If Novo’s price falls below ceiling, generics follow Novo’s price
+    if (Pos_new < pc) {
+      Sf_total <- max(n * ((Pos_new - ff) / vv), 0)
+      Pos_new <- a*(1 + g2)^years2 - b*(QNNs + Sf_total)
+    }
+    
+    Q_total <- QNNs + Sf_total
+    
+    return(data.frame(
+      n = n,
+      QNNs = QNNs,
+      Pos_2 = Pos_new,
+      Sf_total = Sf_total,
+      Sf_per_firm = ifelse(n > 0, Sf_total / n, 0),
+      Q_total = Q_total
+    ))
+  }
+}
+
+# --- UI ---
+ui <- fluidPage(
+  titlePanel("t=2: Competitive Fringe Generics with Dominant Novo Nordisk; Scenario Analysis"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("ff", HTML("Generics Marginal Cost (Constant Portion)"),
+                  min = 3.5, max = 7.5, value = 6.5, step = 0.1),
+      sliderInput("vv", HTML("Generic Marginal Cost (Varying Portion)"),
+                  min = 0.000001, max = 0.005, value = 0.001, step = 0.00005),
+      sliderInput("g2", HTML("Yearly Growth Rate (Y-o-Y%)"),
+                  min = 0.0, max = 0.2, value = 0.1, step = 0.01),
+      sliderInput("years2", HTML("Time Horizon (Years)"),
+                  min = 0, max = 12, value = 8, step = 1),
+      checkboxInput("pc_on", "Enable Generic Price Ceiling", value = FALSE),
+      conditionalPanel(
+        condition = "input.pc_on == true",
+        sliderInput("pc", "Generic Price Ceiling ($)",
+                    min = 10, max = 200, value = 100, step = 10)
+      ),
+      actionButton("reset", "Reset to Base Case")
+    ),
+    mainPanel(
+      fluidRow(
+        column(6, plotlyOutput("pricePlot")),
+        column(6, plotlyOutput("quantityPlot"))
+      )
+    )
+  )
+)
+
+# --- Server ---
+server <- function(input, output, session) {
+  
+  # Reset button observer
+  observeEvent(input$reset, {
+    updateSliderInput(session, "ff", value = 6.5)
+    updateSliderInput(session, "vv", value = 0.001)
+    updateSliderInput(session, "g2", value = 0.1)
+    updateSliderInput(session, "years2", value = 8)
+    updateCheckboxInput(session, "pc_on", value = FALSE)
+    updateSliderInput(session, "pc", value = 100)
+  })
+  
+  results <- reactive({
+    n_grid <- 2:20
+    df <- lapply(n_grid, function(n) {
+      solve_fringe(n, input$ff, input$vv, input$g2, input$years2, a, b, MCQo,
+                   input$pc_on, input$pc)
+    }) %>% bind_rows()
+    
+    # Calculate percentage changes
+    df <- df %>%
+      arrange(n) %>%
+      mutate(
+        pct_change_price = (Pos_2 - lag(Pos_2)) / lag(Pos_2) * 100,
+        pct_change_QNNs = (QNNs - lag(QNNs)) / lag(QNNs) * 100,
+        pct_change_Sf_total = (Sf_total - lag(Sf_total)) / lag(Sf_total) * 100,
+        pct_change_Q_total = (Q_total - lag(Q_total)) / lag(Q_total) * 100,
+        pct_change_from300 = (Pos_2 - 300) / 300 * 100
+      )
+    df
+  })
+  
+   output$pricePlot <- renderPlotly({
+    df <- results()
+    p <- ggplot(df, aes(x = n, y = Pos_2)) +
+      geom_line(aes(color = "Equilibrium Price"), size = 0.6) +
+      geom_point(aes(color = "Equilibrium Price",
+                     text = paste0("n: ", n,
+                                   "<br>P*: ", dollar(Pos_2, accuracy = 0.01),
+                                   "<br>% change from n-1: ",
+                                   ifelse(is.na(pct_change_price), "NA",
+                                          paste0(round(pct_change_price, 2), "%")),
+                                   "<br>% change from P*=300: ",
+                                   paste0(round(pct_change_from300, 2), "%"))),
+                 size = 1.2) +
+      geom_hline(aes(yintercept = 300, linetype = "Original Monopoly Price")) +
+      scale_color_manual(values = c("Equilibrium Price" = "red")) +
+      scale_linetype_manual(values = c("Original Monopoly Price" = "dashed")) +
+      scale_y_continuous(breaks = pretty_breaks(n = 8)) +
+      scale_x_continuous(breaks = seq(2, 20, 2)) +
+      labs(title = "Equilibrium Price vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Equilibrium Price (P*)",
+           color = NULL,
+           linetype = NULL) +
+      theme_minimal(base_size = 11) +
+      theme(
+        legend.position = "bottom",
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        plot.title = element_text(size = 9, face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey90", size = 0.2)
+      )
+    
+    ggplotly(p, tooltip = "text") %>%
+      layout(
+        legend = list(orientation = "h", y = -0.35, font = list(size = 9)),
+        margin = list(b = 80)
+      ) %>%
+      config(displayModeBar = FALSE)
+  })
+  
+  output$quantityPlot <- renderPlotly({
+    df <- results() %>%
+      # compute both shares before pivot
+      mutate(
+        generic_share = ifelse(Q_total > 0, Sf_total / Q_total * 100, NA),
+        novo_share    = ifelse(Q_total > 0, QNNs / Q_total * 100, NA)
+      ) %>%
+      select(n, QNNs, Sf_total, Q_total,
+             pct_change_QNNs, pct_change_Sf_total, pct_change_Q_total,
+             generic_share, novo_share) %>%
+      pivot_longer(cols = c(QNNs, Sf_total, Q_total),
+                   names_to = "Quantity_Type", values_to = "Quantity") %>%
+      mutate(
+        pct_change = case_when(
+          Quantity_Type == "QNNs" ~ pct_change_QNNs,
+          Quantity_Type == "Sf_total" ~ pct_change_Sf_total,
+          Quantity_Type == "Q_total" ~ pct_change_Q_total
+        ),
+        label = case_when(
+          Quantity_Type == "QNNs" ~ "Novo Nordisk Output",
+          Quantity_Type == "Sf_total" ~ "Total Generics Output",
+          Quantity_Type == "Q_total" ~ "Total Market Output"
+        )
+      )
+    
+    p <- ggplot(df, aes(x = n, y = Quantity, color = label)) +
+      geom_line(size = 0.6) +
+      geom_point(aes(text = paste0(
+        "n: ", n,
+        "<br>", label, " : ", comma(round(Quantity, 0)),
+        "<br>% change from n-1: ",
+        ifelse(is.na(pct_change), "NA",
+               paste0(round(pct_change, 2), "%")),
+        ifelse(label == "Total Generics Output",
+               paste0("<br>Generic Market Share: ",
+                      ifelse(is.na(generic_share), "NA",
+                             paste0(round(generic_share, 2), "%"))),
+               ifelse(label == "Novo Nordisk Output",
+                      paste0("<br>Novo Nordisk Market Share: ",
+                             ifelse(is.na(novo_share), "NA",
+                                    paste0(round(novo_share, 2), "%"))),
+                      ""))  # nothing extra for Total Market Output
+      )),
+      size = 1.2) +
+      scale_color_manual(values = c("Novo Nordisk Output" = "red",
+                                    "Total Generics Output" = "blue",
+                                    "Total Market Output" = "darkgreen")) +
+      scale_y_continuous(labels = comma, breaks = pretty_breaks(n = 8)) +
+      scale_x_continuous(breaks = seq(2, 20, 2)) +
+      labs(title = "Equilibrium Output vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Quantity of Ozempic + Biosimilars (Q*)",
+           color = NULL) +
+      theme_minimal(base_size = 11) +
+      theme(
+        legend.position = "bottom",
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        plot.title = element_text(size = 9, face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey90", size = 0.2)
+      )
+    
+    ggplotly(p, tooltip = "text") %>%
+      layout(
+        legend = list(orientation = "h", y = -0.35, font = list(size = 9)),
+        margin = list(b = 80)
+      ) %>%
+      config(displayModeBar = FALSE)
+  })
+}
+
+# --- Run the app ---
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
+
+
+
+
+
+## R Shiny Graphic with Government Intervention + Visuals 
+```{r}
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+library(plotly)
+library(patchwork)
+
+# --- Base parameters ---
+Qos  <- 694444
+Pos  <- 300
+MCQo <- 6.5
+
+# Recovering original a, b from system
+A <- matrix(c(1, -Qos,
+              1, -2*Qos), nrow = 2, byrow = TRUE)
+B <- c(Pos, MCQo)
+sol <- solve(A, B)
+a <- sol[1]; b <- sol[2]
+
+# --- Solver function for top plots ---
+solve_fringe <- function(n, ff, vv, g2, years2, a, b, MCQo, pc_on, pc) {
+  m <- (a * (1 + g2)^years2 / b + n * ff / vv) / (1/b + n/vv)
+  k <- 1 / (1/b + n/vv)
+  QNNs_uncon <- (m - MCQo) / (2 * k)
+  Po_QNN <- function(QNN) {
+    numerator   <- a*(1 + g2)^years2 / b + n*ff / vv - QNN
+    denominator <- 1/b + n/vv
+    numerator / denominator
+  }
+  Pos_uncon <- Po_QNN(QNNs_uncon)
+  Sf_total_uncon <- max(n * ((Pos_uncon - ff) / vv), 0)
+  Q_total_uncon <- QNNs_uncon + Sf_total_uncon
+  
+  if (!pc_on) {
+    return(data.frame(
+      n = n, QNNs = QNNs_uncon, Pos_2 = Pos_uncon,
+      Sf_total = Sf_total_uncon, Sf_per_firm = ifelse(n > 0, Sf_total_uncon / n, 0),
+      Q_total = Q_total_uncon
+    ))
+  }
+  
+  if (Pos_uncon <= pc) {
+    return(data.frame(
+      n = n, QNNs = QNNs_uncon, Pos_2 = Pos_uncon,
+      Sf_total = Sf_total_uncon, Sf_per_firm = ifelse(n > 0, Sf_total_uncon / n, 0),
+      Q_total = Q_total_uncon
+    ))
+  } else {
+    Sf_total <- n * ((pc - ff) / vv)
+    m_resid <- (a * (1 + g2)^years2 / b - Sf_total) / (1/b)
+    k_resid <- 1 / (1/b)
+    QNNs <- (m_resid - MCQo) / (2 * k_resid)
+    Pos_new <- a*(1 + g2)^years2 - b*(QNNs + Sf_total)
+    if (Pos_new < pc) {
+      Sf_total <- max(n * ((Pos_new - ff) / vv), 0)
+      Pos_new <- a*(1 + g2)^years2 - b*(QNNs + Sf_total)
+    }
+    Q_total <- QNNs + Sf_total
+    return(data.frame(
+      n = n, QNNs = QNNs, Pos_2 = Pos_new,
+      Sf_total = Sf_total, Sf_per_firm = ifelse(n > 0, Sf_total / n, 0),
+      Q_total = Q_total
+    ))
+  }
+}
+
+# --- UI ---
+ui <- fluidPage(
+  titlePanel("t=2: Long-run Equilibrium Scenario Analysis; Competitive Fringe Generics with Dominant Novo Nordisk"),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput("ff", HTML("Generics Marginal Cost (Constant Portion)"),
+                  min = 3.5, max = 7.5, value = 6.5, step = 0.1),
+      sliderInput("vv", HTML("Generic Marginal Cost (Varying Portion)"),
+                  min = 0.000001, max = 0.005, value = 0.001, step = 0.00005),
+      sliderInput("g2", HTML("Yearly Growth Rate (Y-o-Y%)"),
+                  min = 0.0, max = 0.2, value = 0.1, step = 0.01),
+      sliderInput("years2", HTML("Time Horizon (Years)"),
+                  min = 0, max = 12, value = 8, step = 1),
+      checkboxInput("pc_on", "Enable Generic Price Ceiling", value = FALSE),
+      conditionalPanel(
+        condition = "input.pc_on == true",
+        sliderInput("pc", "Generic Price Ceiling ($)",
+                    min = 10, max = 200, value = 100, step = 10)
+      ),
+      actionButton("reset", "Reset to Base Case"),
+      hr(style = "border-top: 3px solid #444; margin-top: 30px; margin-bottom: 30px;"),
+      h4("Additional Control for Lower Plots Only"),
+      sliderInput("n_new", "Number of Generic Drug Producers (n)",
+                  min = 2, max = 20, value = 8, step = 1)
+    ),
+    mainPanel(
+      fluidRow(
+        column(6, plotlyOutput("pricePlot")),
+        column(6, plotlyOutput("quantityPlot"))
+      ),
+      hr(),
+      fluidRow(
+        column(12, plotOutput("fringePlots"))
+      )
+    )
+  )
+)
+
+# --- Server ---
+server <- function(input, output, session) {
+  observeEvent(input$reset, {
+    updateSliderInput(session, "ff", value = 6.5)
+    updateSliderInput(session, "vv", value = 0.001)
+    updateSliderInput(session, "g2", value = 0.1)
+    updateSliderInput(session, "years2", value = 8)
+    updateCheckboxInput(session, "pc_on", value = FALSE)
+    updateSliderInput(session, "pc", value = 100)
+  })
+  
+  results <- reactive({
+    n_grid <- 2:20
+    df <- lapply(n_grid, function(n) {
+      solve_fringe(n, input$ff, input$vv, input$g2, input$years2, a, b, MCQo,
+                   input$pc_on, input$pc)
+    }) %>% bind_rows()
+    df <- df %>%
+      arrange(n) %>%
+      mutate(
+        pct_change_price = (Pos_2 - lag(Pos_2)) / lag(Pos_2) * 100,
+        pct_change_QNNs = (QNNs - lag(QNNs)) / lag(QNNs) * 100,
+        pct_change_Sf_total = (Sf_total - lag(Sf_total)) / lag(Sf_total) * 100,
+        pct_change_Q_total = (Q_total - lag(Q_total)) / lag(Q_total) * 100,
+        pct_change_from300 = (Pos_2 - 300) / 300 * 100
+      )
+    df
+  })
+  
+  output$pricePlot <- renderPlotly({
+    df <- results()
+    p <- ggplot(df, aes(x = n, y = Pos_2)) +
+      geom_line(aes(color = "Equilibrium Price"), size = 0.6, show.legend = TRUE) +
+      geom_point(aes(color = "Equilibrium Price",
+                     text = paste0(
+                       "n: ", n,
+                       "<br>P*: ", dollar(Pos_2, accuracy = 0.01),
+                       "<br>% change from n-1: ",
+                       ifelse(is.na(pct_change_price), "NA", paste0(round(pct_change_price, 2), "%")),
+                       "<br>% change from P*=300: ", paste0(round(pct_change_from300, 2), "%")
+                     )),
+                 size = 1.2,
+                 show.legend = FALSE
+                 ) +
+      geom_hline(aes(yintercept = 300, linetype = "Original Monopoly Price")) +
+      scale_color_manual(values = c("Equilibrium Price" = "red")) +
+      scale_linetype_manual(values = c("Original Monopoly Price" = "dashed")) +
+      scale_y_continuous(breaks = pretty_breaks(n = 8)) +
+      scale_x_continuous(breaks = seq(2, 20, 2)) +
+      labs(title = "Equilibrium Price vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Equilibrium Price (P*)",
+           color = NULL,
+           linetype = NULL) +
+      theme_minimal(base_size = 11) +
+      theme(
+        legend.position = "bottom",
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        plot.title = element_text(size = 9, face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey90", size = 0.2)
+      )
+    ggplotly(p, tooltip = "text") %>%
+      layout(
+        legend = list(orientation = "h", y = -0.35, font = list(size = 9)),
+        margin = list(b = 80)
+      ) %>%
+      config(displayModeBar = FALSE) %>%
+  plotly::style(name = "Equilibrium Price", traces = 1) %>%
+  plotly::style(name = "Original Monopoly Price", traces = 3)
+  })
+
+  output$quantityPlot <- renderPlotly({
+    df <- results() %>%
+      mutate(
+        generic_share = ifelse(Q_total > 0, Sf_total / Q_total * 100, NA),
+        novo_share    = ifelse(Q_total > 0, QNNs / Q_total * 100, NA)
+      ) %>%
+      select(n, QNNs, Sf_total, Q_total,
+             pct_change_QNNs, pct_change_Sf_total, pct_change_Q_total,
+             generic_share, novo_share) %>%
+      pivot_longer(
+        cols = c(QNNs, Sf_total, Q_total),
+        names_to = "Quantity_Type",
+        values_to = "Quantity"
+      ) %>%
+      mutate(
+        pct_change = case_when(
+          Quantity_Type == "QNNs" ~ pct_change_QNNs,
+          Quantity_Type == "Sf_total" ~ pct_change_Sf_total,
+          Quantity_Type == "Q_total" ~ pct_change_Q_total
+        ),
+        label = case_when(
+          Quantity_Type == "QNNs" ~ "Novo Nordisk Output",
+          Quantity_Type == "Sf_total" ~ "Total Generics Output",
+          Quantity_Type == "Q_total" ~ "Total Market Output"
+        )
+      )
+
+    p <- ggplot(df, aes(x = n, y = Quantity, color = label)) +
+      geom_line(size = 0.6) +
+      geom_point(aes(text = paste0(
+        "n: ", n,
+        "<br>", label, " : ", comma(round(Quantity, 0)),
+        "<br>% change from n-1: ",
+        ifelse(is.na(pct_change), "NA", paste0(round(pct_change, 2), "%")),
+        ifelse(label == "Total Generics Output",
+               paste0("<br>Generic Market Share: ",
+                      ifelse(is.na(generic_share), "NA", paste0(round(generic_share, 2), "%"))),
+               ifelse(label == "Novo Nordisk Output",
+                      paste0("<br>Novo Nordisk Market Share: ",
+                             ifelse(is.na(novo_share), "NA", paste0(round(novo_share, 2), "%"))),
+                      ""))
+      )), size = 1.2) +
+      scale_color_manual(values = c(
+        "Novo Nordisk Output" = "red",
+        "Total Generics Output" = "blue",
+        "Total Market Output"   = "darkgreen"
+      )) +
+      scale_y_continuous(labels = comma, breaks = pretty_breaks(n = 8)) +
+      scale_x_continuous(breaks = seq(2, 20, 2)) +
+      labs(title = "Equilibrium Output vs. Number of Generic Drug Producers",
+           x = "Number of Generic Drug Producers (n)",
+           y = "Quantity of Ozempic + Biosimilars (Q*)",
+           color = NULL) +
+      theme_minimal(base_size = 11) +
+      theme(
+        legend.position = "bottom",
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        plot.title = element_text(size = 9, face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_line(color = "grey90", size = 0.2)
+      )
+
+    ggplotly(p, tooltip = "text") %>%
+      layout(
+        legend = list(orientation = "h", y = -0.35, font = list(size = 9)),
+        margin = list(b = 80)
+      ) %>%
+      config(displayModeBar = FALSE)
+  })
+
+   # --- Lower comparative-fringe plots ---
+  output$fringePlots <- renderPlot({
+    ff   <- input$ff
+    vv   <- input$vv
+    n    <- input$n_new
+    g2   <- input$g2
+    yrs  <- input$years2
+    pc_on <- input$pc_on
+    pc    <- input$pc
+
+    Demand_full <- function(Q) a * (1 + g2)^yrs - b * Q
+
+    # Default residual demand/MR
+    m <- (a * (1 + g2)^yrs / b + n * ff / vv) / (1/b + n/vv)
+    k <- 1 / (1/b + n/vv)
+    Demand_resid <- function(Q) m - k * Q
+    MR_resid     <- function(Q) m - 2 * k * Q
+
+    # Unconstrained equilibrium
+    Q_dom_uncon <- (m - MCQo) / (2 * k)
+    P_eq_uncon  <- Demand_resid(Q_dom_uncon)
+    Q_fringe_uncon <- max(n * ((P_eq_uncon - ff) / vv), 0)
+
+    # Adjust if ceiling binds
+    if (!pc_on) {
+      Q_dom <- Q_dom_uncon; P_eq <- P_eq_uncon; Q_fringe <- Q_fringe_uncon
+    } else if (P_eq_uncon <= pc) {
+      Q_dom <- Q_dom_uncon; P_eq <- P_eq_uncon; Q_fringe <- Q_fringe_uncon
+    } else {
+      Sf_total <- n * ((pc - ff) / vv)
+      m_resid <- (a * (1 + g2)^yrs / b - Sf_total) / (1/b)
+      k_resid <- 1 / (1/b)
+      Q_dom <- (m_resid - MCQo) / (2 * k_resid)
+      P_eq  <- a * (1 + g2)^yrs - b * (Q_dom + Sf_total)
+      if (P_eq < pc) {
+        Sf_total <- max(n * ((P_eq - ff) / vv), 0)
+        P_eq  <- a * (1 + g2)^yrs - b * (Q_dom + Sf_total)
+      }
+      Q_fringe <- Sf_total
+      # Update residual demand/MR functions for plotting
+      Demand_resid <- function(Q) a * (1 + g2)^yrs - b * (Q + Sf_total)
+      MR_resid     <- function(Q) a * (1 + g2)^yrs - b * Sf_total - 2 * b * Q
+    }
+
+    Q_seq <- seq(0, 2500000, length.out = 400)
+    P_seq <- seq(0, max(Pos, P_eq * 1.5), length.out = 400)
+
+    df_left_demand <- tibble(Q = Q_seq, P = Demand_full(Q_seq))
+    df_left_supply <- tibble(
+  Q = Q_seq,
+  P = ff + vv * (Q_seq / n)   # invert supply function to express P as function of Q
+)
+    df_left_MC_ind <- tibble(
+      q = seq(0, max(Q_fringe / n) * 1.5, length.out = 200),
+      P = ff + vv * seq(0, max(Q_fringe / n) * 1.5, length.out = 200)
+    )
+
+    df_right <- tibble(
+      Q = Q_seq,
+      Demand_full = Demand_full(Q_seq),
+      Demand_resid = Demand_resid(Q_seq),
+      MR = MR_resid(Q_seq),
+      MC = MCQo
+    )
+
+    P_max <- max(df_left_demand$P, df_right$Demand_full, na.rm = TRUE) * 1.05
+
+        plot_left <- ggplot() +
+      geom_line(data = df_left_demand, aes(x = Q, y = P), color = "lightsalmon", size = 1.2) +
+      geom_line(data = df_left_supply, aes(x = Q, y = P), color = "blue", size = 1.2) +
+      geom_line(data = df_left_MC_ind, aes(x = q, y = P), color = "blue", linetype = "dashed", size = 1) +
+      geom_hline(yintercept = P_eq, linetype = "dotted", color = "grey40") +
+      geom_vline(xintercept = Q_fringe, linetype = "dotted", color = "blue") +
+      { if (pc_on) geom_hline(yintercept = pc, color = "black", size = 0.8) } +
+      scale_x_continuous(labels = comma, expand = c(0, 0), limits = c(0, 2500000),
+                         breaks = pretty_breaks(n = 6)) +
+      scale_y_continuous(labels = comma, expand = c(0, 0), limits = c(0, P_max),
+                         breaks = pretty_breaks(n = 6)) +
+      labs(x = expression(paste("Quantity of Generics (",Q[f],")")
+                          ), y = "Market Price (CAD)",
+           title = "Generic Drugs (Competitive Fringe)") +
+      theme_minimal(base_size = 14) +
+      theme(
+        axis.text.x = element_text(size = 8, angle = 30, hjust = 1),
+        axis.text.y = element_text(size = 8)
+      )
+
+    plot_right <- ggplot(df_right, aes(x = Q)) +
+      geom_line(aes(y = Demand_full), color = "lightsalmon", size = 1.2) +
+      geom_line(aes(y = Demand_resid), color = "red", size = 1.2) +
+      geom_line(aes(y = MR), color = "red", linetype = "dashed", size = 1) +
+      geom_line(aes(y = MC), color = "darkgreen", size = 1.2) +
+      geom_vline(xintercept = Q_dom, linetype = "dotted", color = "red") +
+      geom_hline(yintercept = P_eq, linetype = "dotted", color = "grey40") +
+      scale_x_continuous(labels = comma, expand = c(0, 0), limits = c(0, 2500000),
+                         breaks = pretty_breaks(n = 6)) +
+      scale_y_continuous(labels = comma, expand = c(0, 0), limits = c(0, P_max),
+                         breaks = pretty_breaks(n = 6)) +
+      labs(x = expression(paste("Quantity of Brand Ozempic (", Q[O], ")")
+), y = "Market Price (CAD)",
+           title = "Novo Nordisk (Dominant Firm)") +
+      theme_minimal(base_size = 14) +
+      theme(
+        axis.text.x = element_text(size = 8, angle = 30, hjust = 1),
+        axis.text.y = element_text(size = 8)
+      )
+
+    # Combine side-by-side
+    plot_left + plot_right
+  })
+}
+
+# --- Run the app ---
+shinyApp(ui = ui, server = server)
+```
